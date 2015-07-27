@@ -9,8 +9,6 @@
 -export([init/1,
          state_name/2,
          state_name/3,
-         waiting/2,
-         running/2,
          handle_event/3,
          handle_sync_event/4,
          handle_info/3,
@@ -82,7 +80,6 @@ waiting(fake_trigger, #state{cron = Cron}= State)->
 
 waiting(trigger, #state{id = Id, cron = Cron, mfa = MFA}= State)->
     ecrond:update_task_state(Id, running),
-    async_apply(MFA),
     {nextstate, running, State} .   
 
 
