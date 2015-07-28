@@ -5,6 +5,7 @@
 -define(ERR_SYNTAX, cron_syntax_error).
 -define(ERR_INVALID, cron_invalid_field).
 
+
 -define(ALL, "^[*]$").
 -define(NUM, "^[0-9]+$").
 -define(LIST, "^[0-9]+$").
@@ -83,8 +84,8 @@ compile(Str) when is_list(Str) ->
                compile_spec(Min, {0, 59}),
                compile_spec(Hour, {0, 23}),
                compile_spec(Dom, {1, 31}),
-               compile_spec(normalize(Month), {1, 12}),
-               compile_spec(normalize(Dow), {0, 7})
+               compile_spec(normalize(Month, ?MONTH_MAPS), {1, 12}),
+               compile_spec(normalize(Dow, ?WEEK_MAPS), {0, 7})
               }};
         _ ->
             throw({?ERR_SYNTAX, "expected 5 fields"})
@@ -197,11 +198,12 @@ merge(A, B) when is_list(A), is_list(B) ->
     lists:umerge(fun cmp/2, sort(A), sort(B)).
 
 
-normalize(S0) ->
-    S1 = string:to_lower(S0),
+normalize(S, PatMaps) ->
     lists:foldl(fun({Pat, Val}, Acc) ->
                         re:replace(Acc, Pat, Val,[global,{return, list}])
-                     end, S1, ?MONTH_MAPS ++ ?WEEK_MAPS).
+                end, string:to_lower(S), PatMaps).
+
+
 field_type(S) ->
     get_type(S, ?FIELD_PATTERNS).
 unit_type(S) ->
@@ -282,11 +284,11 @@ unit_type_test()->
     ?assertMatch({range_step, _}, unit_type("34-42/34")),
     ?assertEqual({range, [{0, 5}, {0,2}, {3, 2}]}, unit_type("13-24")).
 normalize_test()->
-    ?assertEqual("1", normalize("jan")),
-    ?assertEqual("2", normalize("feb")),
-    ?assertEqual("3,4,5,6,7,8,9,9,10,11,12", normalize("mar,apr,may,jun,jul,aug,sept,sep,oct,nov,dec")),
-    ?assertEqual("0,1,2,3,4,5,6", normalize("sun,mon,tue,wed,thu,fri,sat")),
-    ?assertEqual("1,1,1,4,4", normalize("mon,mon,mon,thu,thu")),
-    ?assertEqual("1,jan2,2", normalize("jan,jan2,tue")).
+    ?assertEqual("1", normalize("jan", ?MONTH_MAPS)),
+    ?assertEqual("2", normalize("feb", ?MONTH_MAPS)),
+    ?assertEqual("3,4,5,6,7,8,9,9,10,11,12", normalize("mar,apr,may,jun,jul,aug,sept,sep,oct,nov,dec", ?MONTH_MAPS)),
+    ?assertEqual("0,1,2,3,4,5,6", normalize("sun,mon,tue,wed,thu,fri,sat", ?WEEK_MAPS)),
+    ?assertEqual("1,1,1,4,4", normalize("mon,mon,mon,thu,thu", ?WEEK_MAPS)),
+    ?assertEqual("1,jan2,2", normalize("jan,jan2,feb", ?MONTH_MAPS)).
 
 -endif.

@@ -1,25 +1,31 @@
--module(ecrond_task).
+-module(ecrond_agent).
 
--behaviour(gen_fsm).
+-behaviour(gen_server).
 
 %% API functions
 -export([start_link/3]).
 
-%% gen_fsm callbacks
+%% gen_server callbacks
 -export([init/1,
-         state_name/2,
-         state_name/3,
-         handle_event/3,
-         handle_sync_event/4,
-         handle_info/3,
-         terminate/3,
-         code_change/4]).
+         handle_call/3,
+         handle_cast/2,
+         handle_info/2,
+         terminate/2,
+         code_change/3]).
 
--record(state, {id, cron, mfa, erond}).
-
--define(DAY_IN_SECONDS, 86400).
--define(HOUR_IN_SECONDS, 3600).
+-define(TIMER_MAX, 4294967295).
 -define(MINUTE_IN_SECONDS, 60).
+-define(HOUR_IN_SECONDS, 60 * 60).
+-define(DAY_IN_SECONDS, 24 * 60 * 60).
+
+-record(state, {
+          name :: term(),
+          schedule :: term(),
+          task :: mfa(),
+          type :: cron | once | interval,
+          state :: waiting | running | done | error,
+          processor :: pid()
+         }).
 
 %%%===================================================================
 %%% API functions
@@ -27,151 +33,117 @@
 
 %%--------------------------------------------------------------------
 %% @doc
-%% Creates a gen_fsm process which calls Module:init/1 to
-%% initialize. To ensure a synchronized start-up procedure, this
-%% function does not return until Module:init/1 has returned.
+%% Starts the server
 %%
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(Id, Cron, MFA) ->
-    gen_fsm:start_link({local, ?MODULE}, ?MODULE, [Id, Cron, MFA], []).
+
+start_link(Name, Schedule, MFA) ->
+    gen_server:start_link(?MODULE, [Name, Schedule, MFA], []).
 
 %%%===================================================================
-%%% gen_fsm callbacks
+%%% gen_server callbacks
 %%%===================================================================
 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% Whenever a gen_fsm is started using gen_fsm:start/[3,4] or
-%% gen_fsm:start_link/[3,4], this function is called by the new
-%% process to initialize.
+%% Initializes the server
 %%
-%% @spec init(Args) -> {ok, StateName, State} |
-%%                     {ok, StateName, State, Timeout} |
+%% @spec init(Args) -> {ok, State} |
+%%                     {ok, State, Timeout} |
 %%                     ignore |
-%%                     {stop, StopReason}
+%%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([Id, Cron, MFA]) ->
-    ecrond:update_task_state(Id, initing),
-    {ok,waiting, #state{id = Id, cron = Cron, mfa = MFA}}.
+init([Name, {Type, _} = Schedule, Task]) when is_atom(Type) ->
+    process_flag(trap_exit, true),
+    set_trigger(Schedule),
+    {ok, #state{name = Name, 
+                schedule = Schedule, 
+                task = Task, 
+                state = waiting, 
+                type = Type}}.
+
 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% There should be one instance of this function for each possible
-%% state name. Whenever a gen_fsm receives an event sent using
-%% gen_fsm:send_event/2, the instance of this function with the same
-%% name as the current state name StateName is called to handle
-%% the event. It is also called if a timeout occurs.
+%% Handling call messages
 %%
-%% @spec state_name(Event, State) ->
-%%                   {next_state, NextStateName, NextState} |
-%%                   {next_state, NextStateName, NextState, Timeout} |
-%%                   {stop, Reason, NewState}
+%% @spec handle_call(Request, From, State) ->
+%%                                   {reply, Reply, State} |
+%%                                   {reply, Reply, State, Timeout} |
+%%                                   {noreply, State} |
+%%                                   {noreply, State, Timeout} |
+%%                                   {stop, Reason, Reply, State} |
+%%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-
-waiting(fake_trigger, #state{cron = Cron}= State)->
-    set_trigger(Cron),
-    {nextstate, waiting, State};
-
-waiting(trigger, #state{id = Id, cron = Cron, mfa = MFA}= State)->
-    ecrond:update_task_state(Id, running),
-    {nextstate, running, State} .   
-
-
-state_name(_Event, State) ->
-    {next_state, state_name, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% There should be one instance of this function for each possible
-%% state name. Whenever a gen_fsm receives an event sent using
-%% gen_fsm:sync_send_event/[2,3], the instance of this function with
-%% the same name as the current state name StateName is called to
-%% handle the event.
-%%
-%% @spec state_name(Event, From, State) ->
-%%                   {next_state, NextStateName, NextState} |
-%%                   {next_state, NextStateName, NextState, Timeout} |
-%%                   {reply, Reply, NextStateName, NextState} |
-%%                   {reply, Reply, NextStateName, NextState, Timeout} |
-%%                   {stop, Reason, NewState} |
-%%                   {stop, Reason, Reply, NewState}
-%% @end
-%%--------------------------------------------------------------------
-state_name(_Event, _From, State) ->
+handle_call(_Request, _From, State) ->
     Reply = ok,
-    {reply, Reply, state_name, State}.
+    {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% Whenever a gen_fsm receives an event sent using
-%% gen_fsm:send_all_state_event/2, this function is called to handle
-%% the event.
+%% Handling cast messages
 %%
-%% @spec handle_event(Event, StateName, State) ->
-%%                   {next_state, NextStateName, NextState} |
-%%                   {next_state, NextStateName, NextState, Timeout} |
-%%                   {stop, Reason, NewState}
+%% @spec handle_cast(Msg, State) -> {noreply, State} |
+%%                                  {noreply, State, Timeout} |
+%%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_event(_Event, StateName, State) ->
-    {next_state, StateName, State}.
+handle_cast(_Msg, State) ->
+    {noreply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% Whenever a gen_fsm receives an event sent using
-%% gen_fsm:sync_send_all_state_event/[2,3], this function is called
-%% to handle the event.
+%% Handling all non call/cast messages
 %%
-%% @spec handle_sync_event(Event, From, StateName, State) ->
-%%                   {next_state, NextStateName, NextState} |
-%%                   {next_state, NextStateName, NextState, Timeout} |
-%%                   {reply, Reply, NextStateName, NextState} |
-%%                   {reply, Reply, NextStateName, NextState, Timeout} |
-%%                   {stop, Reason, NewState} |
-%%                   {stop, Reason, Reply, NewState}
+%% @spec handle_info(Info, State) -> {noreply, State} |
+%%                                   {noreply, State, Timeout} |
+%%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_sync_event(_Event, _From, StateName, State) ->
-    Reply = ok,
-    {reply, Reply, StateName, State}.
+handle_info(trigger, #state{task = Task} = State) ->
+    case Task of
+        {Node, Module, Fun, Args} ->
+            {noreply, State#state{state = running, processor = spawn_link(Node, Module, Fun, Args)}};
+        {Module, Fun, Args} ->
+            {noreply, State#state{state = running, processor = spawn_link(Module, Fun, Args)}};
+        {Node, Fun} ->
+            {noreply, State#state{state = running, processor = spawn_link(Node, Fun)}};
+        {Fun} ->
+            {noreply, State#state{state = running, processor = spawn_link(Fun)}};
+        Fun ->
+            {noreply, State#state{state = running, processor = spawn_link(Fun)}}
+    end;
+handle_info({left, Time}, #state{type = Type, schedule = Schedule} = State) ->
+    case Type =:= interval orelse Type =:= once of
+        true ->
+            send_self_after(Time);
+        false ->
+            set_trigger(Schedule)
+    end,
+    {noreply, State};
+handle_info(_Info, State) ->
+    {noreply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% This function is called by a gen_fsm when it receives any
-%% message other than a synchronous or asynchronous event
-%% (or a system message).
-%%
-%% @spec handle_info(Info,StateName,State)->
-%%                   {next_state, NextStateName, NextState} |
-%%                   {next_state, NextStateName, NextState, Timeout} |
-%%                   {stop, Reason, NewState}
-%% @end
-%%--------------------------------------------------------------------
-handle_info(_Info, StateName, State) ->
-    {next_state, StateName, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called by a gen_fsm when it is about to
+%% This function is called by a gen_server when it is about to
 %% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_fsm terminates with
-%% Reason. The return value is ignored.
+%% necessary cleaning up. When it returns, the gen_server terminates
+%% with Reason. The return value is ignored.
 %%
-%% @spec terminate(Reason, StateName, State) -> void()
+%% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _StateName, _State) ->
+terminate(_Reason, _State) ->
     ok.
 
 %%--------------------------------------------------------------------
@@ -179,26 +151,30 @@ terminate(_Reason, _StateName, _State) ->
 %% @doc
 %% Convert process state when code is changed
 %%
-%% @spec code_change(OldVsn, StateName, State, Extra) ->
-%%                   {ok, StateName, NewState}
+%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
 %% @end
 %%--------------------------------------------------------------------
-code_change(_OldVsn, StateName, State, _Extra) ->
-    {ok, StateName, State}.
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-
+set_trigger({once, MilliSeconds}) ->
+    send_self_after(MilliSeconds);
+set_trigger({interval, MilliSeconds}) ->
+    send_self_after(MilliSeconds);
 set_trigger({cron,Schedule})->
     CurrentDateTime = calendar:universal_time(),
     NextValidDateTime = next_valid_datetime(Schedule, CurrentDateTime),
     SleepFor = time_to_wait_millis(CurrentDateTime, NextValidDateTime),
-    if 
-        SleepFor > 4294967295 ->
-            erlang:send_after(4294967295, self(), fake_trigger);
-        true->
-            erlang:send_after(SleepFor, self(), fake_trigger)
+    send_self_after(SleepFor).
+send_self_after(MilliSeconds) ->
+    if
+        MilliSeconds > ?TIMER_MAX ->
+            erlang:send_after(?TIMER_MAX, self(), {left, MilliSeconds - ?TIMER_MAX});
+        true ->
+            erlang:send_after(MilliSeconds, self(), trigger)
     end.
 
 
@@ -320,18 +296,6 @@ time_to_wait_millis(CurrentDateTime, NextDateTime) ->
     NextSeconds = calendar:datetime_to_gregorian_seconds(NextDateTime),
     SecondsToSleep = NextSeconds - CurrentSeconds,
     SecondsToSleep * 1000.
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
