@@ -5,7 +5,7 @@
 %% API functions
 -export([start_link/3]).
 -export([state/1, alter_schedule/2,
-        alter_task/2]).
+         alter_task/2]).
 %% gen_server callbacks
 -export([init/1,
          handle_call/3,
@@ -93,13 +93,18 @@ init([Name, {Type, _} = Schedule, Task]) when is_atom(Type) ->
 %%--------------------------------------------------------------------
 handle_call({alter_task, NewTask}, _From, #state{task = OldTask} = State) ->
     {reply, {ok, OldTask}, State#state{task = NewTask}};
-handle_call({alter_schedule, NewSchedule}, _From, #state{schedule = OldSchedule, timer = Timer} = State) ->
-    catch erlang:cancel_timer(Timer),
-    case catch set_trigger(NewSchedule) of
-        {'EXIT', Reason} ->
-            {stop, Reason, {error, Reason}, State};
-        NewTimer ->
-            {reply, {ok,OldSchedule}, State#state{schedule = NewSchedule, timer = NewTimer}}
+handle_call({alter_schedule, NewSchedule}, _From, #state{schedule = OldSchedule, timer = Timer, state = TaskState} = State) ->
+    case TaskState of
+        waiting ->
+            catch erlang:cancel_timer(Timer),
+            case catch set_trigger(NewSchedule) of
+                {'EXIT', Reason} ->
+                    {stop, Reason, {error, Reason}, State};
+                NewTimer ->
+                    {reply, {ok,OldSchedule}, State#state{schedule = NewSchedule, timer = NewTimer}}
+            end;
+        running ->
+            {reply, {ok, OldSchedule}, State#state{schedule = NewSchedule}}
     end;
 handle_call(state, _From,#state{state = TaskState} = State) ->
     {reply, {ok, TaskState}, State};
